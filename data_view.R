@@ -45,3 +45,11 @@ d %>% filter(!is.na(GraLastDate)) %>% mutate(b = TagID %in% pd$Tag_Code) %>% gro
 # all the fish for the years we are interested in are present in the LGR file
 
 pd <- pd %>% filter(Tag_Code %in% d$TagID)
+
+# look at detections
+ant <- sort(unique(pd$Antenna_ID))
+head(pd$Tag_Code)
+pd %>% filter(Tag_Code == "384.3B2394899C") %>% as.data.frame()
+pd %>% filter(Tag_Code == "384.3B2394899C") %>% as.data.frame()
+
+table(pd$Antenna_ID)

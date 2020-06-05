@@ -1,0 +1,62 @@
+
+	data{
+	   # dimension parameters
+   	dataDims <- dim(d) 
+   	F <- dataDims[1]# number of fish
+   	T <- dataDims[2] # number of time steps
+	}
+    model{
+   	# all fish start below dam
+   	for(f in 1:F){
+   			z[f,1] <- 1
+   	}
+    
+   	# likelihood
+   	for (t in 2:T){
+   		for(f in 1:F){
+   			# state of fish f
+   			z[f,t] ~ dcat(p[z[f,t-1],1:9])
+   			
+   			# detections of fish f at each state
+   			for(s in 1:4){
+   				d[f,t,s] ~ dbern(dp[s] * ((z[f,t]/2) == s) + ((z[f,t]/2) != s) * .000001)
+   			}
+   		}
+   	}
+   	
+   	# priors
+   	# detection probs
+   	for(s in 1:4){
+   		dp[s] ~ dbeta(1,1)
+   	}
+   	
+   	# transition probs
+   	# rows are current pos, columns are new pos
+   	p[1,1:2] ~ ddirich(c(1,1))
+   	p[1,3:9] <- rep(.000001,7)
+   	p[2,1:3] ~ ddirich(c(1,1,1))
+   	p[2,4:9] <- rep(.000001,6)
+   	p[3,1] <- .000001
+   	p[3,2:4] ~ ddirich(c(1,1,1))
+   	p[3,5:9] <- rep(.000001,5)
+   	p[4,1:3] <- rep(.000001,3)
+   	p[4,4:5] ~ ddirich(c(1,1))
+   	p[4,6:9] <- rep(.000001,4)
+   	p[5,1:4] <- rep(.000001,4)
+   	p[5,5:6] ~ ddirich(c(1,1))
+   	p[5,7:9] <- rep(.000001,3)
+   	p[6,1:4] <- rep(.000001,4)
+   	p[6,5:7] ~ ddirich(c(1,1,1))
+   	p[6,8:9] <- rep(.000001,2)
+   	p[7,1:5] <- rep(.000001,5)
+   	p[7,6:8] ~ ddirich(c(1,1,1))
+   	p[7,9] <- .000001
+   	p[8,1:6] <- rep(.000001,6)
+   	p[8,7:9] ~ ddirich(c(1,1,1))
+   	p[9,2:8] <- rep(.000001,7)
+   	p[9,1] ~ dbeta(1,1)
+   	p[9,9] <- 1.0 - p[9,1]
+
+    }
+
+    
