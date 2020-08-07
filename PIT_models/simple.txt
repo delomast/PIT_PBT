@@ -4,10 +4,10 @@
    	for (g in 1:G){
    		obsPIT[g] ~ dbin(t[g], round(exp(logtotalG[g])))
    	}
-		
+
 		# priors
 		for (g in 1:G){
-   		logtotalG[g] ~  dnorm(0,1.0E-3) T(0,)
+   		logtotalG[g] ~  dnorm(0,1.0E-3)
 		}
 
    	# summary

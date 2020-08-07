@@ -1,0 +1,89 @@
+
+	# note: everything is set up as weeks, but really stratum = week
+	data{
+		nWeeks <- length(w_count)
+		n_AD_groups <- length(AD_tag) - 1 # -1 to ignore Unassigned group
+		n_AI_groups <- length(AI_tag) - 1
+		for (w in 1:length(w_count)){
+			n_AD_genotype[w] <- sum(AD_PBT[,w])
+			n_AI_genotype[w] <- sum(AI_PBT[,w])
+			n_clip_trap[w] <- n_AD[w] + n_AI[w]
+			alpha_AD[1:length(AD_tag),w] <- ifelse(AD_PBT[,w] > 0, .1, 1e-20)
+   		alpha_AI[1:length(AI_tag),w] <- ifelse(AI_PBT[,w] > 0, .1, 1e-20)
+		}
+		n_pools <- length(indexes)
+   	for(p in 1:length(indexes)){
+			alpha_p[p,1:3] <- ifelse(obsPIT_both[p,] > 0, .1, 1e-20)
+		}
+
+	}
+
+    model{
+    
+   	# likelihood
+   	
+   	# PBT
+   	for (w in 1:nWeeks){
+   		# proportion clipped
+   		n_AD[w] ~ dbin(p_clip[w], n_clip_trap[w])
+   		
+   		# proportion of each AD group
+   		true_AD_PBT[1:(n_AD_groups + 1),w] ~ dmulti(pi_AD[,w], n_AD_genotype[w])
+   		for (g in 1:n_AD_groups){
+   			AD_PBT[g,w] ~ dbin(AD_tag[g], true_AD_PBT[g,w])
+   		}
+
+   		# proportion of each AI group
+   		true_AI_PBT[1:(n_AI_groups + 1),w] ~ dmulti(pi_AI[,w], n_AI_genotype[w])
+   		for (g in 1:n_AI_groups){
+   			AI_PBT[g,w] ~ dbin(AI_tag[g], true_AI_PBT[g,w])
+   		}
+   	}
+   	
+   	# PIT
+   	for (p in 1:n_pools){ # for each pool
+   		for(s in 1:indexes[p]){ # for each PIT group in the pool
+   			# obsPIT_both[p,s] ~ dbin(pit_tag_both[p,s] * (1 - tag_loss[p,s]), round(pool_abundance[p] * pit_pi[p,s]))
+   			obsPIT_both[p,s] ~ dbin(pit_tag_both[p,s] * .9999, round(pool_abundance[p] * pit_pi[p,s]))
+   		}
+   	}
+   	
+   	# mult by window counts and add up
+   	for (w in 1:nWeeks){
+   		tot_AD[w] <- p_clip[w] * w_count[w]
+   		tot_AI[w] <- w_count[w] - tot_AD[w]
+   		tot_AD_groups[1:(n_AD_groups + 1),w] <- pi_AD[,w] * tot_AD[w]
+   		tot_AI_groups[1:(n_AI_groups + 1),w] <- pi_AI[,w] * tot_AI[w]
+   		
+   	}
+   	for(g in 1:(n_AD_groups + 1)){
+   		grand_tot_AD_groups[g] <- sum(tot_AD_groups[g,])
+   	}
+   	for(g in 1:(n_AI_groups + 1)){
+   		grand_tot_AI_groups[g] <- sum(tot_AI_groups[g,])
+   	}
+   	grand_tot_AD <- sum(tot_AD)
+   	grand_tot_AI <- sum(tot_AI)
+   	
+   	# abundance of pools
+   	for(p in 1:n_pools){
+   		pool_AD_total[p] <- grand_tot_AD_groups %*% AD_col_vectors[,p]
+   		pool_AI_total[p] <- grand_tot_AI_groups %*% AI_col_vectors[,p]
+   		pool_abundance[p] ~ sum(pool_AD_total[p], pool_AI_total[p])
+   	}
+   	
+   	# priors
+   	# PBT
+   	for (w in 1:nWeeks){
+   		p_clip[w] ~ dbeta(.01,.01)
+   		pi_AD[1:(n_AD_groups + 1),w] ~ ddirich(alpha_AD[,w])
+   		pi_AI[1:(n_AI_groups + 1),w] ~ ddirich(alpha_AI[,w])
+   	}
+   	# PIT
+   	for (p in 1:n_pools){
+   		pit_pi[p,1:3] ~ ddirich(alpha_p[p,])
+   	}
+
+    }
+
+    

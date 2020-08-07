@@ -1,0 +1,69 @@
+
+	data{
+		nWeeks <- length(w_count)
+		n_AD_groups <- length(AD_tag) - 1 # -1 to ignore Unassigned group
+		n_AI_groups <- length(AI_tag) - 1
+		for (w in 1:length(w_count)){
+			n_AD_genotype[w] <- sum(AD_PBT[,w])
+			n_AI_genotype[w] <- sum(AI_PBT[,w])
+			n_clip_trap[w] <- n_AD[w] + n_AI[w]
+		}
+	}
+
+    model{
+   	# likelihood
+   	
+   	for (w in 1:nWeeks){
+   		# proportion clipped
+   		n_AD[w] ~ dbin(p_clip[w], n_clip_trap[w])
+   		# proportion of each AD group
+   		true_AD_PBT[1:(n_AD_groups + 1),w] ~ dmulti(pi_AD[,w], n_AD_genotype[w])
+   		for (g in 1:n_AD_groups){
+   			AD_PBT[g,w] ~ dbin(AD_tag[g], true_AD_PBT[g,w])
+   		}
+   		# proportion of each AI group
+   		true_AI_PBT[1:(n_AI_groups + 1),w] ~ dmulti(pi_AI[,w], n_AI_genotype[w])
+   		for (g in 1:n_AI_groups){
+   			AI_PBT[g,w] ~ dbin(AI_tag[g], true_AI_PBT[g,w])
+   		}
+   		
+   	}
+   	
+   	# walk across weeks
+   	for (w in 2:nWeeks){
+   		logit_p_clip[w] ~ dnorm(logit(p_clip[w-1]), p_clip_tau)
+   		p_clip[w] <- ilogit(logit_p_clip[w])
+   		
+   		for(g in 1:n_AD_groups){
+   			logit_pi_AD[g,w] ~ dnorm(logit(pi_AD[g,w-1]), p_AD_tau[g])
+   			pi_AD[g,w] <- ilogit(logit_pi_AD[g,w])
+   		}
+   		pi_AD[n_AD_groups + 1,w] <- 1 - sum(pi_AD[1:n_AD_groups,w])
+   		
+   		for(g in 1:n_AI_groups){
+   			logit_pi_AI[g,w] ~ dnorm(logit(pi_AI[g,w-1]), p_AI_tau[g])
+   			pi_AI[g,w] <- ilogit(logit_pi_AI[g,w])
+   		}
+   		pi_AI[n_AI_groups + 1,w] <- 1 - sum(pi_AI[1:n_AI_groups,w])
+   	}
+
+		# priors on first week
+		p_clip[1] ~ dbeta(.01,.01)
+   	pi_AD[1:(n_AD_groups + 1),1] ~ ddirich(rep(.01, n_AD_groups + 1))
+   	pi_AI[1:(n_AI_groups + 1),1] ~ ddirich(rep(.01, n_AI_groups + 1))
+   	
+   	# priors on walks
+   	p_clip_tau ~ dgamma(1.0E-3, 1.0E-3)
+	   for(g in 1:n_AD_groups){
+	   	p_AD_tau[g] ~ dgamma(1.0E-3, 1.0E-3)
+	   }
+		
+		for(g in 1:n_AI_groups){
+			p_AI_tau[g] ~ dgamma(1.0E-3, 1.0E-3)
+		}
+		
+   	# summary - mult by window counts and add up
+
+    }
+
+    

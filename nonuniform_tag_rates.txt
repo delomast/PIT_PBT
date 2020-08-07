@@ -1,0 +1,6 @@
+PBT_RELEASE_GROUP	PBT_RELEASE_GROUP_TAGRATE
+NFClearwaterR-Smolt	0.9935
+SelwayR-Parr	0.9863
+LoloNewsomeMeadow-Parr	0.9585
+RapidR-Smolt	0.8962
+NPTH-Smolt	1

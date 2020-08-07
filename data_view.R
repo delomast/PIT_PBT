@@ -53,3 +53,7 @@ pd %>% filter(Tag_Code == "384.3B2394899C") %>% as.data.frame()
 pd %>% filter(Tag_Code == "384.3B2394899C") %>% as.data.frame()
 
 table(pd$Antenna_ID)
+
+# window counts
+wc <- read_csv("data/window_counts.csv") %>% mutate(OperationsDate = mdy(OperationsDate))
+

@@ -1,0 +1,19 @@
+
+    model{
+   	# likelihood
+   	for (g in 1:G){
+   		obsPIT[g] ~ dbin(t[g] * pi[g], grandTotal)
+   	}
+   	
+
+		# priors
+		pi ~ ddirich(rep(.000000001, G))
+
+   	# summary
+		for (g in 1:G){
+   		totalG[g] <- grandTotal * pi[g]
+   	}
+
+    }
+
+    

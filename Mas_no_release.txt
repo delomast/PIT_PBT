@@ -1,0 +1,3 @@
+maPed	GenMa	OffspringReleaseStrategy
+OtsCLWH13S	OtsCLWH13S_0972	NA
+OtsRAPH13S	OtsRAPH13S_1855	NA

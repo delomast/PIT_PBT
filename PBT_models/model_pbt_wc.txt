@@ -1,0 +1,91 @@
+
+	data{
+		nWeeks <- length(w_count)
+		n_AD_groups <- length(AD_tag) - 1 # -1 to ignore Unassigned group
+		n_AI_groups <- length(AI_tag) - 1
+		for (w in 1:length(w_count)){
+			n_AD_genotype[w] <- sum(AD_PBT[,w])
+			n_AI_genotype[w] <- sum(AI_PBT[,w])
+			n_clip_trap[w] <- n_AD[w] + n_AI[w]
+		}
+	}
+
+    model{
+   	# likelihood
+   	
+   	for (w in 1:nWeeks){
+   		# proportion clipped
+   		# n_AD[w] ~ dbin(p_clip[w], n_clip_trap[w])
+   		# proportion of each AD group
+   		true_AD_PBT[1:(n_AD_groups + 1),w] ~ dmulti(pi_AD[,w], n_AD_genotype[w])
+   		for (g in 1:n_AD_groups){
+   			AD_PBT[g,w] ~ dbin(AD_tag[g], true_AD_PBT[g,w])
+   		}
+   		# proportion of each AI group
+   		true_AI_PBT[1:(n_AI_groups + 1),w] ~ dmulti(pi_AI[,w], n_AI_genotype[w])
+   		for (g in 1:n_AI_groups){
+   			AI_PBT[g,w] ~ dbin(AI_tag[g], true_AI_PBT[g,w])
+   		}
+   		
+   	}
+   	
+   	# walk across weeks
+   	for (w in 2:nWeeks){
+   		for(g in 1:(n_AD_groups + 1)){
+   			log_abund_AD[g,w] ~ dnorm(log_abund_AD[g,w-1], AD_tau[g])
+   		}
+   		for(g in 1:(n_AI_groups + 1)){
+   			log_abund_AI[g,w] ~ dnorm(log_abund_AI[g,w-1], AI_tau[g])
+   		}
+   	}
+   	
+   	# conversion between abundance and proportions
+   	for (w in 1:nWeeks){
+   		for (g in 1:(n_AD_groups + 1)){
+   			tempEXP_AD[g,w] <- exp(log_abund_AD[g,w])
+   		}
+   		for (g in 1:(n_AI_groups + 1)){
+   			tempEXP_AI[g,w] <- exp(log_abund_AI[g,w])
+   		}
+   		tot_AD[w] <- sum(tempEXP_AD[,w])
+   		tot_AI[w] <- sum(tempEXP_AI[,w])
+   		# w_count[w] ~ sum(tot_AD[w], tot_AI[w])
+   		
+   		# p_clip[w] <- tot_AD[w] / w_count[w]
+   	}
+
+   	for (w in 1:nWeeks){
+   		for (g in 1:(n_AD_groups + 1)){
+   			pi_AD[g,w] <- exp(log_abund_AD[g,w]) / tot_AD[w]
+   		}
+   		for (g in 1:(n_AI_groups + 1)){
+   			pi_AI[g,w] <- exp(log_abund_AI[g,w]) / tot_AI[w]
+   		}
+   	}
+   	
+
+		# priors on first week
+		for(g in 1:(n_AD_groups + 1)){
+			log_abund_AD[g,1] ~ dnorm(0,1.0E-3)
+		}
+		for(g in 1:(n_AI_groups + 1)){
+			log_abund_AI[g,1] ~ dnorm(0,1.0E-3)
+		}
+
+   	# priors on walks
+	   for(g in 1:(n_AD_groups + 1)){
+	   	# AD_tau[g] ~ dgamma(1.0E-3, 1.0E-3)
+	   	sig[g] ~ dunif(0,10)
+	   	AD_tau[g] <- 1 / pow(sig[g], 2)
+	   	# AD_tau[g] ~ dunif(999,1000)
+	   }
+		
+		for(g in 1:(n_AI_groups + 1)){
+			AI_tau[g] ~ dgamma(1.0E-3, 1.0E-3)
+		}
+		
+   	# summary - mult by window counts and add up
+
+    }
+
+    

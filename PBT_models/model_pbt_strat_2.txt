@@ -1,0 +1,72 @@
+
+	# note: everything is set up as weeks, but really stratum = week
+	data{
+		nWeeks <- length(w_count)
+		n_AD_groups <- length(AD_tag) - 1 # -1 to ignore Unassigned group
+		n_AI_groups <- length(AI_tag) - 1
+		for (w in 1:length(w_count)){
+			n_AD_genotype[w] <- sum(AD_PBT[,w])
+			n_AI_genotype[w] <- sum(AI_PBT[,w])
+			n_clip_trap[w] <- n_AD[w] + n_AI[w]
+		}
+	}
+
+    model{
+
+   	# likelihood
+   	for (w in 1:nWeeks){
+   		# proportion clipped
+   		n_AD[w] ~ dbin(p_clip[w], n_clip_trap[w])
+   		
+   		# AD trap and genotype rate
+   		n_AD_genotype[w] ~ dbin(p_trap_AD[w], round(tot_AD[w]))
+   		n_AI_genotype[w] ~ dbin(p_trap_AI[w], round(tot_AI[w]))
+
+   		# detection of each AD group
+   		for (g in 1:n_AD_groups){
+   			AD_PBT[g,w] ~ dbin(AD_tag[g] * p_trap_AD[w], round(exp(log_AD_PBT[g,w])))
+   		}
+   		
+   		# detection of each AI group
+   		for (g in 1:n_AI_groups){
+   			AI_PBT[g,w] ~ dbin(AI_tag[g] * p_trap_AI[w], round(exp(log_AI_PBT[g,w])))
+   		}
+   	}
+   	
+   	# priors
+   	for (w in 1:nWeeks){
+   		p_trap_AD[w] ~ dbeta(.01,.01)
+   		p_trap_AI[w] ~ dbeta(.01,.01)
+   		p_clip[w] ~ dbeta(.01,.01)
+   		for (g in 1:n_AD_groups){
+   			log_AD_PBT[g,w] ~ dnorm(0,1.0E-3)
+   		}
+   		for (g in 1:n_AI_groups){
+   			log_AI_PBT[g,w] ~ dnorm(0,1.0E-3)
+   		}
+   	}
+
+   	# summary - mult by window counts and add up
+   	for (w in 1:nWeeks){
+   		tot_AD[w] <- p_clip[w] * w_count[w]
+   		tot_AI[w] <- w_count[w] - tot_AD[w]
+	   	for(g in 1:(n_AD_groups)){
+	   		tot_AD_groups[g,w] <- exp(log_AD_PBT[g,w])
+	   	}
+	   	for(g in 1:(n_AI_groups)){
+	   		tot_AI_groups[g,w] <- exp(log_AI_PBT[g,w])
+	   	}
+   	}
+   	for(g in 1:(n_AD_groups)){
+   		grand_tot_AD_groups[g] <- sum(tot_AD_groups[g,])
+   	}
+   	for(g in 1:(n_AI_groups)){
+   		grand_tot_AI_groups[g] <- sum(tot_AI_groups[g,])
+   	}
+   	grand_tot_AD <- sum(tot_AD)
+   	grand_tot_AI <- sum(tot_AI)
+   	
+   	
+    }
+
+    
