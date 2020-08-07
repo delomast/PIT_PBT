@@ -1,0 +1,17 @@
+
+    model{
+   	# likelihood
+   	for (g in 1:2){
+   		obs[g] ~ dbin(t[g], round(exp(logtotalG)))
+   	}
+
+		# priors
+		logtotalG ~  dnorm(0,1.0E-3)
+		
+
+   	totalG <- round(exp(logtotalG))
+   	
+
+    }
+
+    

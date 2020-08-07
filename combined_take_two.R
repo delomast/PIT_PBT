@@ -1,5 +1,7 @@
 # combined models
-# let's first make it work for ONE stratum
+###########
+## this file is current active attempt: stratifying PIT estimates and performing all inference on proportions
+###########
 
 library(tidyverse)
 library(lubridate)
@@ -34,6 +36,21 @@ for(i in 1:nrow(pools)){
 					  pool = pools$Pool[i]))
 }
 
+
+# it will drastically simplify programming if PBT release groups are either all AI or all AD
+# so just splitting each group
+add_suffix <- rep("_ad", nrow(trap))
+add_suffix[grepl("LGRU", trap$Pedigree_name)] <- "_ai"
+trap$relGroup[!is.na(trap$relGroup)] <- paste0(trap$relGroup[!is.na(trap$relGroup)], add_suffix[!is.na(trap$relGroup)])
+
+tag_rates <- bind_rows(tag_rates %>% mutate(PBT_RELEASE_GROUP = paste0(PBT_RELEASE_GROUP, "_ad")),
+						 tag_rates %>% mutate(PBT_RELEASE_GROUP = paste0(PBT_RELEASE_GROUP, "_ai"))
+						 )
+pbt_pools <- bind_rows(pbt_pools %>% mutate(group = paste0(group, "_ad")),
+						 pbt_pools %>% mutate(group = paste0(group, "_ai"))
+						 )
+# table(sort(unique(trap$relGroup)) %in% tag_rates$PBT_RELEASE_GROUP, useNA = "if")
+
 # PIT data
 d <- read_csv("data/raw_data.csv", guess_max = 1e6) %>% rename(RAL_RTR = `RAL/RTR`, Expansion_Ref = `Expansion Reference`)
 e <- read_csv("data/expansions.csv")
@@ -47,12 +64,12 @@ aPit <- d %>% filter(!is.na(GraLastDate)) %>%
 
 PIT_tagRates <- aPit %>% select(Expansion_Ref, tagRate) %>% distinct
 
-
-
 ######################################################################
 ######################################################################
 
-
+## I think this model could be written in stan
+## because parameters are all proportions
+## may have to try it
 modFile <- "combined_models/model_no_adjust_wc.txt"
 cat("
 	# note: everything is set up as weeks, but really stratum = week
@@ -64,22 +81,28 @@ cat("
 			n_AD_genotype[w] <- sum(AD_PBT[,w])
 			n_AI_genotype[w] <- sum(AI_PBT[,w])
 			n_clip_trap[w] <- n_AD[w] + n_AI[w]
-			alpha_AD[1:length(AD_tag),w] <- ifelse(AD_PBT[,w] > 0, .1, 1e-20)
-   		alpha_AI[1:length(AI_tag),w] <- ifelse(AI_PBT[,w] > 0, .1, 1e-20)
 		}
-		n_pools <- length(indexes)
-   	for(p in 1:length(indexes)){
-			alpha_p[p,1:3] <- ifelse(obsPIT_both[p,] > 0, .1, 1e-20)
-		}
-
+		n_PIT_groups <- length(pit_tag) - 1
 	}
 
     model{
-    
-   	# likelihood
+
    	
-   	# PBT
    	for (w in 1:nWeeks){
+	   	# prior
+	   	# this is the prior for the top level pool composition for the week
+	   	pi_pools[1:(n_pools + 1),w] <- ddirich(pool_priors[1:(n_pools + 1),w]) # +1 pool is fish not in a relevant pool
+	    
+	    
+	   	for(p in 1:n_pools){
+	   		# these are priors splitting each pool into pbt groups
+	   		split_pools_pbt[p,w,1:(n_AD_groups + n_AI_groups + 1)] ~ ddirich()
+	   		# these are priors splitting each pool into pit groups
+	   		split_pools_pit[p,w,1:(n_PIT_groups + 1)] ~ ddirich()
+	   	}
+   	
+   	
+   		# likelihood
    		# proportion clipped
    		n_AD[w] ~ dbin(p_clip[w], n_clip_trap[w])
    		
@@ -94,52 +117,40 @@ cat("
    		for (g in 1:n_AI_groups){
    			AI_PBT[g,w] ~ dbin(AI_tag[g], true_AI_PBT[g,w])
    		}
-   	}
-   	
-   	# PIT
-   	for (p in 1:n_pools){ # for each pool
-   		for(s in 1:indexes[p]){ # for each PIT group in the pool
-   			# obsPIT_both[p,s] ~ dbin(pit_tag_both[p,s] * (1 - tag_loss[p,s]), round(pool_abundance[p] * pit_pi[p,s]))
-   			obsPIT_both[p,s] ~ dbin(pit_tag_both[p,s] * .9999, round(pool_abundance[p] * pit_pi[p,s]))
-   		}
-   	}
-   	
-   	# mult by window counts and add up
-   	for (w in 1:nWeeks){
-   		tot_AD[w] <- p_clip[w] * w_count[w]
-   		tot_AI[w] <- w_count[w] - tot_AD[w]
-   		tot_AD_groups[1:(n_AD_groups + 1),w] <- pi_AD[,w] * tot_AD[w]
-   		tot_AI_groups[1:(n_AI_groups + 1),w] <- pi_AI[,w] * tot_AI[w]
    		
+   		# proportion of each PIT group
+   		true_PIT[1:(n_PIT_groups + 1),w] ~ dmulti(pi_PIT[,w], n_PIT_scanned[w])
+   		for (g in 1:n_PIT_groups){
+   			# pit_detect[g,w] ~ dbin(pit_tag[g] - tag_loss[g], true_PIT[g,w])
+   			pit_detect[g,w] ~ dbin(pit_tag[g], true_PIT[g,w])
+   		}
+   		
+   		# link of pi_PIT, pi_AD, and pi_AI all back to pi_pools
+   		for (g in 1:n_AD_groups){
+   			pi_AD[g,w] <- pi_pools[,w] %*% split_pools_pbt[,w,g]
+   		}
+   		# need to think about if this is really correct
+   		pi_AD[(n_AD_groups + 1),w] <- 1 - sum(pi_AD[1:n_AD_groups,w])
+   		
+   		##
+   		# Need to split unassigned into unassigned AD and AI
+   		# also, split_pools_pbt is all pbt groups, ad and ai, need to reconcile
+   		##
+   		
+   		for (g in (n_AD_groups + 1):(n_AD_groups + n_AI_groups)){
+   			# so split pools is AD followed by AI and then unassigned (for pit only groups)
+   			pi_AI[g - n_AD_groups,w] <- pi_pools[,w] %*% split_pools_pbt[,w,g]
+   		}
+   		# need to think about if this is really correct
+   		pi_AI[(n_AI_groups + 1),w] <- 1 - sum(pi_AI[1:n_AI_groups,w])
+   		
+   		for (g in 1:n_PIT_groups){
+   			pi_PIT[g,w] <- pi_pools[,w] %*% split_pools_pit[,w,g]
+   		}
+   		# need to think about if this is really correct
+   		pi_AI[(n_PIT_groups + 1),w] <- 1 - sum(pi_PIT[1:n_PIT_groups,w])
    	}
-   	for(g in 1:(n_AD_groups + 1)){
-   		grand_tot_AD_groups[g] <- sum(tot_AD_groups[g,])
-   	}
-   	for(g in 1:(n_AI_groups + 1)){
-   		grand_tot_AI_groups[g] <- sum(tot_AI_groups[g,])
-   	}
-   	grand_tot_AD <- sum(tot_AD)
-   	grand_tot_AI <- sum(tot_AI)
    	
-   	# abundance of pools
-   	for(p in 1:n_pools){
-   		pool_AD_total[p] <- grand_tot_AD_groups %*% AD_col_vectors[,p]
-   		pool_AI_total[p] <- grand_tot_AI_groups %*% AI_col_vectors[,p]
-   		pool_abundance[p] ~ sum(pool_AD_total[p], pool_AI_total[p])
-   	}
-   	
-   	# priors
-   	# PBT
-   	for (w in 1:nWeeks){
-   		p_clip[w] ~ dbeta(.01,.01)
-   		pi_AD[1:(n_AD_groups + 1),w] ~ ddirich(alpha_AD[,w])
-   		pi_AI[1:(n_AI_groups + 1),w] ~ ddirich(alpha_AI[,w])
-   	}
-   	# PIT
-   	for (p in 1:n_pools){
-   		pit_pi[p,1:3] ~ ddirich(alpha_p[p,])
-   	}
-
     }
 
     ",
@@ -147,13 +158,8 @@ cat("
 
 
 PBT_estimates <- list()
-# y <- 2019
+# y <- 2016
 for(y in 2016:2019){
-	
-	# just make it work for one year and one stratum
-	y = 2016
-	s_test = 20
-	
 	# organize data
 	# totals trapped and counted at window by week
 	# filter by year and make NA as "Unassigned"
@@ -171,39 +177,174 @@ for(y in 2016:2019){
 																		  AI_count = sum(LGDMarkAD == "AI", na.rm = TRUE)) %>%
 		right_join(w_count, by = c("weekSampled")) %>% mutate(AD_count = replace_na(AD_count, 0), AI_count = replace_na(AI_count, 0)) %>%
 		select(weekSampled, count, t_trap, AD_count, AI_count) %>% arrange(weekSampled)
-
-	w_count <- w_count %>% filter(weekSampled == s_test)
-	temp_trap <- temp_trap %>% filter(weekSampled == s_test)
-	temp_pit <- aPit %>% filter(rYear == y, weekSampled == s_test)
-	
-	######
-	# now, need, for each pool, the counts of the subgroups and the tagging rates of the subgroups
-	######
-	AD_pbt_counts <- temp_trap %>% filter(grepl("OtsLGRA", Individual_name)) %>% count(relGroup)
-	AI_pbt_counts <- temp_trap %>% filter(grepl("OtsLGRU", Individual_name)) %>% count(relGroup)
-	
-	temp_pbt_pools <- pbt_pools %>% filter(group %in% c(temp_trap$relGroup)) %>% 
-		pull(pool) %>% unique
-	temp_pit_pools <- pit_pools %>% filter(group %in% temp_pit$Expansion_Ref) %>% pull(pool) %>%
-		unique
-	all_pools <- union(temp_pbt_pools, temp_pit_pools)
-	AD_pool_count <- array(0, dim = c(length(all_pools) + 1, nrow(AD_pbt_counts)))
-	AI_pool_count <- array(0, dim = c(length(all_pools) + 1, nrow(AI_pbt_counts)))
-	for(p in 1:length(all_pools)){
-		t_pools <- pbt_pools %>% filter(pool == all_pools[p]) %>% pull(group)
-		temp <- AD_pbt_counts$n
-		temp[!AD_pbt_counts$relGroup %in% t_pools] <- 0
-		AD_pool_count[p,] <- temp
-		temp <- AI_pbt_counts$n
-		temp[!AI_pbt_counts$relGroup %in% t_pools] <- 0
-		AI_pool_count[p,] <- temp
+	# choosing strata
+	# as.data.frame(w_count)
+	# grouping early and late weeks into strata as needed
+	# manually determined targeting minimum number genotyped ~50
+	if(y == 2016){
+		w_count$weekSampled[w_count$weekSampled < 18] <- 17
+		temp_trap$weekSampled[temp_trap$weekSampled < 18] <- 17
+	} else if (y == 2017){
+		w_count$weekSampled[w_count$weekSampled < 21] <- 20
+		temp_trap$weekSampled[temp_trap$weekSampled < 21] <- 20
+		w_count$weekSampled[w_count$weekSampled > 30] <- 31
+		temp_trap$weekSampled[temp_trap$weekSampled > 30] <- 31
+	} else if (y == 2018){
+		w_count$weekSampled[w_count$weekSampled < 20] <- 19
+		temp_trap$weekSampled[temp_trap$weekSampled < 20] <- 19
+		w_count$weekSampled[w_count$weekSampled == 31] <- 30
+		temp_trap$weekSampled[temp_trap$weekSampled == 31] <- 30
+		w_count$weekSampled[w_count$weekSampled > 30] <- 31
+		temp_trap$weekSampled[temp_trap$weekSampled > 30] <- 31
+	} else if (y == 2019){
+		w_count$weekSampled[w_count$weekSampled < 20] <- 19
+		temp_trap$weekSampled[temp_trap$weekSampled < 20] <- 19
+		w_count$weekSampled[w_count$weekSampled > 31] <- 32
+		temp_trap$weekSampled[temp_trap$weekSampled > 31] <- 32
 	}
-	# last row and last column is "Unassigned" not exactly sure how to use this right now
-	AD_pool_count[length(all_pools) + 1,nrow(AD_pbt_counts)] <- AD_pbt_counts$n[AD_pbt_counts$relGroup == "Unassigned"]
-	AI_pool_count[length(all_pools) + 1,nrow(AI_pbt_counts)] <- AI_pbt_counts$n[AI_pbt_counts$relGroup == "Unassigned"]
-
 	
-		
+	w_count <- w_count %>% group_by(weekSampled) %>% 
+		summarize(count = sum(count), t_trap = sum(t_trap), AD_count = sum(AD_count), AI_count = sum(AI_count))
+	
+	
+	# number PBT tagged fish in each group by week
+	# matrix with weeks as columns and groups as rows
+	# AD-clipped
+	template <- temp_trap %>% filter(grepl("OtsLGRA", temp_trap$Pedigree_name)) %>%
+		pull(relGroup) %>% unique %>% expand_grid(relGroup = ., weekSampled = unique(w_count$weekSampled))
+	AD_PBT_counts <- temp_trap %>% filter(grepl("OtsLGRA", temp_trap$Pedigree_name)) %>% 
+		group_by(weekSampled) %>% count(relGroup) %>% right_join(template, by = c("relGroup", "weekSampled")) %>%
+		arrange(relGroup, weekSampled) %>% mutate(n = replace_na(n,0)) %>% spread(weekSampled, n)
+	if(any(as.numeric(colnames(AD_PBT_counts)[2:ncol(AD_PBT_counts)]) != w_count$weekSampled)) stop("error AD colnames in ", y)
+	AD_tag <- AD_PBT_counts %>% select(relGroup) %>% rename(PBT_RELEASE_GROUP = relGroup) %>% 
+		left_join(tag_rates, by = "PBT_RELEASE_GROUP")
+	if(any(AD_tag$PBT_RELEASE_GROUP != AD_PBT_counts$relGroup)) stop("error AD rownames in ", y)
+	
+	# AD-intact
+	template <- temp_trap %>% filter(grepl("OtsLGRU", temp_trap$Pedigree_name)) %>%
+		pull(relGroup) %>% unique %>% expand_grid(relGroup = ., weekSampled = unique(w_count$weekSampled))
+	AI_PBT_counts <- temp_trap %>% filter(grepl("OtsLGRU", temp_trap$Pedigree_name)) %>% 
+		group_by(weekSampled) %>% count(relGroup) %>% right_join(template, by = c("relGroup", "weekSampled")) %>%
+		arrange(relGroup, weekSampled) %>% mutate(n = replace_na(n,0)) %>% spread(weekSampled, n)
+	if(any(as.numeric(colnames(AI_PBT_counts)[2:ncol(AI_PBT_counts)]) != w_count$weekSampled)) stop("error AI colnames in ", y)
+	AI_tag <- AI_PBT_counts %>% select(relGroup) %>% rename(PBT_RELEASE_GROUP = relGroup) %>% 
+		left_join(tag_rates, by = "PBT_RELEASE_GROUP")
+	if(any(AI_tag$PBT_RELEASE_GROUP != AI_PBT_counts$relGroup)) stop("error AI rownames in ", y)
+
+	# PIT data
+	template <- aPit %>% filter(rYear == y) %>% pull(Expansion_Ref) %>% unique %>% 
+		expand_grid(Expansion_Ref = ., weekSampled = unique(w_count$weekSampled))
+	dy <- aPit %>% filter(rYear == y) %>% group_by(weekSampled) %>% count(Expansion_Ref) %>% 
+		right_join(template, by = c("Expansion_Ref", "weekSampled")) %>%
+		arrange(Expansion_Ref, weekSampled) %>% mutate(n = replace_na(n,0)) %>% spread(weekSampled, n)
+	temp <- slice(dy,1) %>% mutate(Expansion_Ref = "Unassigned") %>% as.data.frame
+	temp[,2:ncol(temp)] <- w_count$count - colSums(dy[,2:ncol(dy)])
+	if(any(temp[,2:ncol(temp)] < 0)) stop("Error in pit tag window count compilation")
+	dy <- bind_rows(dy, temp)
+	dy_tag <- dy %>% select(Expansion_Ref) %>% left_join(PIT_tagRates, by = "Expansion_Ref")
+	if(any(dy_tag$Expansion_Ref != dy$Expansion_Ref)) stop("error pit rownames in ", y)
+	
+	
+	# pools
+	temp_pbt_pools <- pbt_pools %>% filter(group %in% c(AD_tag$PBT_RELEASE_GROUP, AI_tag$PBT_RELEASE_GROUP)) %>% 
+		pull(pool) %>% unique
+	temp_pit_pools <- pit_pools %>% filter(group %in% dy$Expansion_Ref) %>% pull(pool) %>%
+		unique
+	union_pools <- sort(union(temp_pbt_pools, temp_pit_pools))
+	
+	# each column is a 1-column matrix with a 1 meaning that (AD/AI/pit) group is in the pool
+	# it is assumed that either a pool is only represented by tagged groups, or is only represented by untagged groups
+	# within each data set (PBT or pit)
+	AD_col_vectors <- matrix(0, nrow = nrow(AD_PBT_counts), ncol = length(union_pools))
+	AI_col_vectors <- matrix(0, nrow = nrow(AI_PBT_counts), ncol = length(union_pools))
+	PIT_col_vectors <- matrix(0, nrow = nrow(dy), ncol = length(union_pools))
+	for(i in 1:length(union_pools)){
+		t_PBT <- pbt_pools %>% filter(pool == union_pools[i]) %>% pull(group)
+		AD_col_vectors[which(AD_PBT_counts$relGroup %in% t_PBT),i] <- 1
+		AI_col_vectors[which(AI_PBT_counts$relGroup %in% t_PBT),i] <- 1
+		t_PIT <- pit_pools %>% filter(pool == union_pools[i]) %>% pull(group)
+		PIT_col_vectors[which(dy$Expansion_Ref %in% t_PIT),i] <- 1
+	}
+	colSums(AD_col_vectors)
+	colSums(AI_col_vectors)
+	colSums(PIT_col_vectors)
+	
+	# last row should be zero, all others should be 1
+	rowSums(AD_col_vectors)
+	rowSums(AI_col_vectors)
+	rowSums(PIT_col_vectors)
+	
+	# now need priors for the top level pools
+	pool_priors <- matrix(0, nrow = length(union_pools), ncol = nrow(w_count))
+	for(i in 1:length(union_pools)){
+		pool_priors[i,] <- ifelse(AD_col_vectors[,i] %*% as.matrix(AD_PBT_counts[2:ncol(AD_PBT_counts)]) +
+				AI_col_vectors[,i] %*% as.matrix(AI_PBT_counts[2:ncol(AI_PBT_counts)]) +
+				PIT_col_vectors[,i] %*% as.matrix(dy[2:ncol(dy)]) > 0, 1, 0)
+	}
+	pool_priors <- rbind(pool_priors, rep(1, nrow(pool_priors))) # adding fish not in a relevant pool
+	pool_priors <- t(t(pool_priors) / colSums(pool_priors)) # normalizing so each prior has 1 psuedocount
+	
+	# now need priors splitting each pool into PBT groups IN EACH STRATA
+	# pool, week, group(AD,AI, unassigned)
+	# -1 is b/c boht AD and AI have unassigned rows
+	split_pools_pbt <- array(0, dim = c(length(union_pools), nrow(w_count), nrow(AD_PBT_counts) + nrow(AI_PBT_counts) - 1))
+	# first put 1's in each cell with observed tagged fish
+	# I'm sure there is a quicker vectorized way to do this, but it is hard enough to follow as it is
+	for(i in 1:length(union_pools)){
+		temp_p <- pbt_pools %>% filter(pool == union_pools[i]) %>% pull(group)
+		for(w in 1:nrow(w_count)){
+			for(g in 1:(nrow(AD_PBT_counts)-1)){
+				if(!AD_PBT_counts$relGroup[g] %in% temp_p) next
+				split_pools_pbt[i,w,g] <- as.numeric(AD_PBT_counts[[w + 1]][g] > 0)
+			}
+			for(g in 1:(nrow(AI_PBT_counts)-1)){
+				if(!AI_PBT_counts$relGroup[g] %in% temp_p) next
+				split_pools_pbt[i,w,g + nrow(AD_PBT_counts) - 1] <- as.numeric(AI_PBT_counts[[w + 1]][g] > 0)
+			}
+		}
+	}
+	# now normalize split_pools_pbt so psuedocounts sum to 1
+	# and for those that were not observed, put 1 for the "Unassigned" group
+	
+	
+	
+	
+	
+	
+	
+	
+	# turn into list to pass to JAGS
+	all_data <- list(w_count = w_count$count,
+						  AD_PBT = as.matrix(AD_PBT_counts[2:ncol(AD_PBT_counts)]),
+						  AD_tag = AD_tag$PBT_RELEASE_GROUP_TAGRATE,
+						  AI_PBT = as.matrix(AI_PBT_counts[2:ncol(AI_PBT_counts)]),
+						  AI_tag = AI_tag$PBT_RELEASE_GROUP_TAGRATE,
+						  n_AD = w_count$AD_count,
+						  n_AI = w_count$AI_count,
+						  AD_col_vectors = AD_col_vectors,
+						  AI_col_vectors = AI_col_vectors,
+						  PIT_col_vectors = PIT_col_vectors,
+						  pit_detect = as.matrix(dy[2:ncol(dy)]),
+						  pit_tag = dy_tag$tagRate,
+						  n_pools = length(union_pools),
+						  pool_priors = pool_priors
+						  )
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	pool_abund <- rep(0, length(intersect_pools))
+	for(p in 1:length(intersect_pools)){
+		temp <- dy$n[PIT_col_vectors[,p] > 0]
+		temp_tag <- dy$tagRate[PIT_col_vectors[,p] > 0]
+		pool_abund[p] <- sum(temp / temp_tag)
+	}
+	
 	inits <- list(
 		.RNG.name = "base::Mersenne-Twister",
 		.RNG.seed = 7,
@@ -211,10 +352,11 @@ for(y in 2016:2019){
 		pi_AI = t(t(all_data$AI_PBT) / colSums(all_data$AI_PBT)),
 		pit_pi = (obsPIT_both / pit_tag_both) / rowSums(obsPIT_both / pit_tag_both, na.rm = TRUE)
 	)
+	
 	inits$pit_pi[is.na(inits$pit_pi)] <- 0
 	iterations <- 20000
 	chains <- 1	
-	
+	# all_data$obsPIT_both <- ceiling(all_data$obsPIT_both / 10000)
 	model <- jags.model(file = modFile, data=all_data, n.chains = chains, inits = inits)
 	samples <- coda.samples(model, c("grand_tot_AD_groups", "grand_tot_AI_groups", "grand_tot_AD", "grand_tot_AI"), n.iter=iterations)
 	

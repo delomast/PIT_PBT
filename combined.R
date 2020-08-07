@@ -286,10 +286,11 @@ for(y in 2016:2019){
 		pi_AI = t(t(all_data$AI_PBT) / colSums(all_data$AI_PBT)),
 		pit_pi = (obsPIT_both / pit_tag_both) / rowSums(obsPIT_both / pit_tag_both, na.rm = TRUE)
 	)
+	
 	inits$pit_pi[is.na(inits$pit_pi)] <- 0
 	iterations <- 20000
 	chains <- 1	
-	
+	# all_data$obsPIT_both <- ceiling(all_data$obsPIT_both / 10000)
 	model <- jags.model(file = modFile, data=all_data, n.chains = chains, inits = inits)
 	samples <- coda.samples(model, c("grand_tot_AD_groups", "grand_tot_AI_groups", "grand_tot_AD", "grand_tot_AI"), n.iter=iterations)
 	
